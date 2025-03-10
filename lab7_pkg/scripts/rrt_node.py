@@ -16,6 +16,7 @@ from geometry_msgs.msg import Point
 from nav_msgs.msg import Odometry
 from ackermann_msgs.msg import AckermannDriveStamped, AckermannDrive
 from nav_msgs.msg import OccupancyGrid
+from bitarray import bitarray
 
 # TODO: import as you need
 
@@ -29,6 +30,46 @@ class Node(object):
         self.cost = None # only used in RRT*
         self.is_root = False
 
+
+# Create a class for occupancy grid - this will be a 2d array of 0s and 1s.
+# 0s represent free space, 1s represent occupied space.
+# To store it, we have each row (y - coordinate) as a bit array.
+# This way, we can access the occupancy grid as occupancy_grid[i][j].
+# There will also be a method to convert from (x, y) coordinates to (i, j) indices.
+class OccupancyGrid(object):
+    def __init__(self, x_bounds, y_bounds, cell_size):
+        self.x_bounds = x_bounds
+        self.y_bounds = y_bounds
+        self.cell_size = cell_size
+        
+        # The arrays will be a circular buffer of bitarrays
+        self.start_row_index = 0
+        
+        # Create an array of bitarrays
+        self.occupancy_grid = []
+        num_arrays = int((x_bounds[1] - x_bounds[0]) / cell_size)
+        length = int((y_bounds[1] - y_bounds[0]) / cell_size)
+        for i in range(num_arrays):
+            self.occupancy_grid.append(bitarray(length))
+            self.occupancy_grid[i].setall(0)
+
+    def __getitem__(self, coordinate):
+        x, y = coordinate
+        i = int((x - self.x_bounds[0]) / self.cell_size)
+        i = (i + self.start_row_index) % len(self.occupancy_grid) # circular buffer
+        j = int((y - self.y_bounds[0]) / self.cell_size)
+        return self.occupancy_grid[i][j]
+    
+    def add_row(self, row):
+        """
+        Append a new row to the occupancy grid.
+        """
+        # Rewrite the (start_row_index)th row, and increment the start_row_index,
+        # as this is a circular buffer.
+        self.occupancy_grid[self.start_row_index] = row
+        self.start_row_index = (self.start_row_index + 1) % len(self.occupancy_grid)
+
+
 # class def for RRT
 class RRT(Node):
     def __init__(self):
@@ -36,6 +77,14 @@ class RRT(Node):
         # TODO: grab topics from param file, you'll need to change the yaml file
         pose_topic = "ego_racecar/odom"
         scan_topic = "/scan"
+        self.declare_parameter('lookahead', 5.0)
+        self.declare_parameter('max_distance', 2.0)
+        self.declare_parameter('cell_size', 0.1)
+        self.declare_parameter('goal_close_enough', 0.05)
+        self.lookahead = self.get_parameter('lookahead').value
+        self.max_distance = self.get_parameter('max_distance').value
+        self.cell_size = self.get_parameter('cell_size').value
+        self.goal_close_enough = self.get_parameter('goal_close_enough').value
 
         # you could add your own parameters to the rrt_params.yaml file,
         # and get them here as class attributes as shown above.
@@ -46,20 +95,20 @@ class RRT(Node):
             pose_topic,
             self.pose_callback,
             1)
-        self.pose_sub_
 
         self.scan_sub_ = self.create_subscription(
             LaserScan,
             scan_topic,
             self.scan_callback,
             1)
-        self.scan_sub_
 
         # publishers
         # TODO: create a drive message publisher, and other publishers that you might need
 
         # class attributes
         # TODO: maybe create your occupancy grid here
+        self.occupancy_grid = OccupancyGrid((0, self.lookahead), (-self.lookahead, self.lookahead), self.cell_size)
+        
 
     def scan_callback(self, scan_msg):
         """
@@ -70,6 +119,10 @@ class RRT(Node):
         Returns:
 
         """
+        # for first time step, update the occupancy grid with the scan
+        # for subsequent time steps, update the last row of the occupancy grid
+        # with the scan
+
 
     def pose_callback(self, pose_msg):
         """
@@ -93,8 +146,10 @@ class RRT(Node):
             (x, y) (float float): a tuple representing the sampled point
 
         """
-        x = None
-        y = None
+
+        x_bounds = (0, self.lookahead)
+        x = np.random.uniform(x_bounds[0], x_bounds[1])
+        y = np.random.uniform(-1*x, x)
         return (x, y)
 
     def nearest(self, tree, sampled_point):
@@ -107,7 +162,8 @@ class RRT(Node):
         Returns:
             nearest_node (int): index of neareset node on the tree
         """
-        nearest_node = 0
+        idx = np.argmin([LA.norm(np.array([node.x, node.y]) - np.array(sampled_point)) for node in tree])
+        nearest_node = tree[idx]
         return nearest_node
 
     def steer(self, nearest_node, sampled_point):
@@ -122,6 +178,23 @@ class RRT(Node):
             new_node (Node): new node created from steering
         """
         new_node = None
+        # vector from nearest to sampled
+        vec_to_sampled = np.array(sampled_point) - np.array([nearest_node.x, nearest_node.y])
+        dist_to_sampled = LA.norm(vec_to_sampled)
+        vec_to_sampled = vec_to_sampled / dist_to_sampled
+        # if the distance to the sampled point is greater than the max distance
+        # then we should only move max distance in the direction of the sampled point
+        if dist_to_sampled > self.max_distance:
+            new_node = Node()
+            new_node.x = nearest_node.x + self.max_distance * vec_to_sampled[0]
+            new_node.y = nearest_node.y + self.max_distance * vec_to_sampled[1]
+            new_node.parent = nearest_node
+        else:
+            new_node = Node()
+            new_node.x = sampled_point[0]
+            new_node.y = sampled_point[1]
+            new_node.parent = nearest_node
+
         return new_node
 
     def check_collision(self, nearest_node, new_node):
@@ -136,7 +209,18 @@ class RRT(Node):
             collision (bool): whether the path between the two nodes are in collision
                               with the occupancy grid
         """
-        return True
+        # check if the line between nearest and new_node is in collision
+        node_dist = LA.norm(np.array([nearest_node.x, nearest_node.y]) - np.array([new_node.x, new_node.y]))
+        cos_theta = (new_node.x - nearest_node.x) / node_dist
+        sin_theta = (new_node.y - nearest_node.y) / node_dist
+        num_points = int(node_dist / self.cell_size)
+        i = np.arange(num_points)
+        xs = nearest_node.x + i * self.cell_size * cos_theta
+        ys = nearest_node.y + i * self.cell_size * sin_theta
+        if np.any(self.occupancy_grid[xs, ys]):
+            return True
+
+        return False
 
     def is_goal(self, latest_added_node, goal_x, goal_y):
         """
@@ -148,9 +232,13 @@ class RRT(Node):
             goal_x (double): x coordinate of the current goal
             goal_y (double): y coordinate of the current goal
         Returns:
-            close_enough (bool): true if node is close enoughg to the goal
+            close_enough (bool): true if node is close enough to the goal
         """
+        dist_to_goal = LA.norm(np.array([latest_added_node.x, latest_added_node.y]) - np.array([goal_x, goal_y]))
+        if dist_to_goal <= self.goal_close_enough:
+            return True
         return False
+
 
     def find_path(self, tree, latest_added_node):
         """
@@ -164,8 +252,12 @@ class RRT(Node):
             path ([]): valid path as a list of Nodes
         """
         path = []
+        current_node = latest_added_node
+        while current_node is not None:
+            path.append(current_node)
+            current_node = current_node.parent
+        path.reverse()
         return path
-
 
 
     # The following methods are needed for RRT* and not RRT
