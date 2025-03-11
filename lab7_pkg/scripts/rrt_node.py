@@ -143,7 +143,7 @@ class RRT(Node):
         self.declare_parameter('goal_bias', 0.05)
         self.declare_parameter('goal_close_enough', 0.05)
         self.declare_parameter('obstacle_inflation_radius', 0.20)
-        self.declare_parameter('num_rrt_points', 200)
+        self.declare_parameter('num_rrt_points', 800)
         self.declare_parameter('waypoint_file', '/home/vaithak/Downloads/UPenn/F1Tenth/sim_ws/src/sampling-based-motion-planning-team6/waypoints/fitted_waypoints.csv')
 
         self.lookahead = self.get_parameter('lookahead').value
@@ -178,11 +178,11 @@ class RRT(Node):
         self.grid_vis_pub_ = self.create_publisher(OccupancyGrid, '/rrt/grid', 10)
         self.path_vis_pub_ = self.create_publisher(Marker, '/rrt/path', 10)
         self.tree_vis_pub_ = self.create_publisher(MarkerArray, '/rrt/tree', 10)
-        self.waypoint_to_track_pub_ = self.create_publisher(PointStamped, '/waypoint_to_track', 10)
+        self.waypoint_to_track_pub_ = self.create_publisher(PointStamped, '/rrt/waypoint_to_track', 10)
 
         # Create an occupancy grid of nav2_msgs/OccupancyGrid type
         self.grid_bounds_x = (0.0, self.lookahead)
-        self.grid_bounds_y = (-self.lookahead/2, self.lookahead/2)
+        self.grid_bounds_y = (-self.lookahead, self.lookahead)
         self.occupancy_grid = OccupancyGridManager(self.grid_bounds_x,
                                                    self.grid_bounds_y,
                                                    self.cell_size, 
@@ -191,6 +191,12 @@ class RRT(Node):
 
         # Create a list to store the tree nodes
         self.tree = []
+
+        # Variables for pure pursuit
+        self.prev_curvature = None
+        self.kp_gain = 0.4
+        self.kd_gain = 0.0
+        self.adaptive_speed = lambda curvature: 0.8
 
 
     def scan_callback(self, scan_msg):
@@ -345,6 +351,39 @@ class RRT(Node):
                 break
 
         return path
+    
+
+    def pure_pursuit(self, current_goal):
+        """
+        The pure pursuit controller
+        Args: 
+            current_goal (Pose): goal pose in car frame
+        
+        Publishes:
+            AckermannDriveStamped: publishes the drive
+        """
+        # Calculate the curvature/steering angle
+        dist_to_goal = np.sqrt(current_goal[0]**2 + current_goal[1]**2)
+        if dist_to_goal < 1e-2:
+            return
+        curvature = 2 * current_goal[1] / (dist_to_goal**2)
+        if self.prev_curvature is None:
+            self.prev_curvature = curvature
+        steering_angle = self.kp_gain * curvature + self.kd_gain * (curvature - self.prev_curvature)
+        self.prev_curvature = curvature
+        if DEBUG:
+            self.get_logger().info(f'Steering angle: {steering_angle}')
+
+        # Publish the drive message
+        drive_msg = AckermannDriveStamped()
+        drive_msg.header.stamp = self.get_clock().now().to_msg()
+        drive_msg.header.frame_id = 'map'
+        drive_msg.drive.steering_angle = steering_angle
+        drive_msg.drive.speed = self.adaptive_speed(curvature)
+        if DEBUG:
+            self.get_logger().info(f'Steering angle: {drive_msg.drive.steering_angle}')
+            self.get_logger().info(f'Speed: {drive_msg.drive.speed}')
+        self.drive_pub_.publish(drive_msg)
 
 
     def pose_callback(self, pose_msg):
@@ -362,14 +401,15 @@ class RRT(Node):
 
         # Get the current goal
         closest_index = np.argmin(np.linalg.norm(self.waypoints[:, :2] - np.array([x, y]), axis=1))
+        goal_point = None
         for i in range(closest_index, closest_index + len(self.waypoints)):
             if i >= len(self.waypoints):
                 i = i - len(self.waypoints)
             curr_dist = np.linalg.norm(self.waypoints[i, :2] - np.array([x, y]))
-            if curr_dist > 0.9 * self.lookahead:
+            if curr_dist > 0.8 * self.lookahead:
                 goal_point = self.waypoints[i, :2]
                 break
-
+        
         goal_point_car_frame = self.transform_point_to_car_frame(goal_point, pose)
         # Visualize the goal point
         if DEBUG:
@@ -387,9 +427,13 @@ class RRT(Node):
 
         # Find the waypoint to track
         waypoint_to_track = path[0]
+        if len(path) > 1:
+            waypoint_to_track = path[1]
 
         # Publish the waypoint to track
-        self.publish_waypoint_to_track((waypoint_to_track.x, waypoint_to_track.y))
+        # self.publish_waypoint_to_track((waypoint_to_track.x, waypoint_to_track.y))
+        # print(f'Waypoint to track: {waypoint_to_track.x}, {waypoint_to_track.y}')
+        self.pure_pursuit((waypoint_to_track.x, waypoint_to_track.y))
 
 
     def sample(self, goal):
@@ -409,7 +453,8 @@ class RRT(Node):
         x_bounds = self.grid_bounds_x
         x = np.random.uniform(x_bounds[0], x_bounds[1])
         # Sample y from -x to x, but also within the grid bounds for y
-        y_bounds = np.max([-x, self.grid_bounds_y[0]]), np.min([x, self.grid_bounds_y[1]])
+        # y_bounds = np.max([-x, self.grid_bounds_y[0]]), np.min([x, self.grid_bounds_y[1]])
+        y_bounds = self.grid_bounds_y
         y = np.random.uniform(y_bounds[0], y_bounds[1])
         return (x, y)
 
