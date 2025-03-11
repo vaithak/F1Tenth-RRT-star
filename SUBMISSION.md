@@ -1,4 +1,4 @@
-# Lab 1: Automatic Emergency Braking
+# Lab 6: Sampling based motion planning - RRT*
 
 ## Video Link
-(FILL ME IN)
+ - [Basic RRT working on Simulator](https://youtu.be/ZJQH1_YIZVs)  
