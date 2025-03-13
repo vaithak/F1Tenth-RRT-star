@@ -69,7 +69,8 @@ class OccupancyGridManager:
         x, y = coordinate
         i = int((x - self.x_bounds[0]) / self.cell_size)
         j = int((y - self.y_bounds[0]) / self.cell_size)
-        self.occupancy_grid[i, j] = value
+        if i >= 0 and i < len(self.occupancy_grid) and j >= 0 and j < len(self.occupancy_grid[0]):
+            self.occupancy_grid[i, j] = value
 
     def populate(self, scan_msg):
         """
@@ -140,12 +141,12 @@ class RRT(Node):
         self.declare_parameter('lookahead', 4.0)
         self.declare_parameter('max_steer_distance', 0.8)
         self.declare_parameter('min_waypoint_tracking_distance', 0.8)
-        self.declare_parameter('waypoint_close_enough', 0.8)
+        self.declare_parameter('waypoint_close_enough', 0.4)
         self.declare_parameter('cell_size', 0.1)
         self.declare_parameter('goal_bias', 0.1)
         self.declare_parameter('goal_close_enough', 0.05)
         self.declare_parameter('obstacle_inflation_radius', 0.20)
-        self.declare_parameter('num_rrt_points', 100)
+        self.declare_parameter('num_rrt_points', 250)
         self.declare_parameter('neighborhood_radius', 1.0)
         self.declare_parameter('waypoint_file', '/home/vaithak/Downloads/UPenn/F1Tenth/sim_ws/src/sampling-based-motion-planning-team6/waypoints/fitted_waypoints.csv')
 
@@ -187,7 +188,7 @@ class RRT(Node):
         self.waypoint_to_track_pub_ = self.create_publisher(Marker, '/rrt/waypoint_to_track', 10)
 
         # Create an occupancy grid of nav2_msgs/OccupancyGrid type
-        self.grid_bounds_x = (0.0, self.lookahead)
+        self.grid_bounds_x = (0.0, self.lookahead*1.2)
         self.grid_bounds_y = (-self.lookahead, self.lookahead)
         self.occupancy_grid = OccupancyGridManager(self.grid_bounds_x,
                                                    self.grid_bounds_y,
@@ -204,7 +205,7 @@ class RRT(Node):
         self.prev_curvature = None
         self.kp_gain = 0.4
         self.kd_gain = 0.0
-        self.adaptive_speed = lambda curvature: 1.5
+        self.adaptive_speed = lambda curvature: 0.8
 
 
     def scan_callback(self, scan_msg):
@@ -493,63 +494,63 @@ class RRT(Node):
         Args: 
             pose_msg (PoseStamped): incoming message from subscribed topic
         """
-        # if not self.grid_formed:
-        #     return
+        if not self.grid_formed:
+            return
 
         # Get the current x, y position of the vehicle
         pose = pose_msg.pose.pose
         x = pose.position.x
         y = pose.position.y
 
-        # Get the current goal
-        closest_index = np.argmin(np.linalg.norm(self.waypoints[:, :2] - np.array([x, y]), axis=1))
-        goal_point = None
-        for i in range(closest_index, closest_index + len(self.waypoints)):
-            if i >= len(self.waypoints):
-                i = i - len(self.waypoints)
-            curr_dist = np.linalg.norm(self.waypoints[i, :2] - np.array([x, y]))
-            if curr_dist > 0.8 * self.lookahead:
-                goal_point = self.waypoints[i, :2]
-                break
+        new_rrt_required = False
+        waypoint_to_track = None
+        if self.current_following_waypoint is None:
+            new_rrt_required = True
+        else:
+            dist_to_waypoint = LA.norm(np.array(self.current_following_waypoint) - np.array([x, y]))
+            if dist_to_waypoint <= self.waypoint_close_enough:
+                new_rrt_required = True
 
-        goal_point_car_frame = self.transform_point_to_car_frame(goal_point, pose)
-        # Visualize the goal point
-        if DEBUG:
-            self.visualize_goal(goal_point_car_frame)
+            # Or check if waypoint is behind the car
+            waypoint_to_track = self.transform_point_to_car_frame(self.current_following_waypoint, pose)
+            if waypoint_to_track[0] < 0:
+                new_rrt_required = True
 
-        # # Find new plan if current waypoint is reached
-        # dist_to_waypoint = 0.0
-        # waypoint_to_track = None
-        # x_in_car_frame = 0.0
-        # if self.current_following_waypoint is not None:
-        #     waypoint_to_track = self.transform_point_to_car_frame(self.current_following_waypoint, pose)
-        #     dist_to_waypoint = LA.norm(waypoint_to_track)
-        #     x_in_car_frame = waypoint_to_track[0]
-        # if dist_to_waypoint < self.waypoint_close_enough or x_in_car_frame < 0:
-        # if True:
-            # Find the path from the current pose to the goal
-        # path = self.rrt(goal_point_car_frame)
-        path = self.rrt_star(goal_point_car_frame)
-        if path is None or len(path) < 2:
-            return None
+        # Run RRT to get a new path if required.
+        if new_rrt_required:
+            # Get the current goal
+            closest_index = np.argmin(np.linalg.norm(self.waypoints[:, :2] - np.array([x, y]), axis=1))
+            goal_point = None
+            for i in range(closest_index, closest_index + len(self.waypoints)):
+                if i >= len(self.waypoints):
+                    i = i - len(self.waypoints)
+                curr_dist = np.linalg.norm(self.waypoints[i, :2] - np.array([x, y]))
+                if curr_dist > 0.8 * self.lookahead:
+                    goal_point = self.waypoints[i, :2]
+                    break
 
-        # Visualize the path
-        if DEBUG:
-            self.visualize_path(path)
-            self.visualize_tree()
+            goal_point_car_frame = self.transform_point_to_car_frame(goal_point, pose)
+            # Visualize the goal point
+            if DEBUG:
+                self.visualize_goal(goal_point_car_frame)
 
-        # Find the waypoint to track
-        # self.current_following_waypoint = self.find_waypoint_to_track(path)
-        waypoint_to_track = self.find_waypoint_to_track(path)
-        if DEBUG:
-            self.visualize_waypoint_to_track(waypoint_to_track)
-            # if self.current_following_waypoint is None:
-            #     print("No waypoint found")
-            #     print("Path length: ", len(path))
-            #     print("Path: ", path)
-            # self.current_following_waypoint = self.transform_point_to_map_frame(self.current_following_waypoint, pose)
+            # path = self.rrt(goal_point_car_frame)
+            path = self.rrt_star(goal_point_car_frame)
+            if path is None or len(path) < 2:
+                return None
 
-            # waypoint_to_track = self.transform_point_to_car_frame(self.current_following_waypoint, pose)
+            # Visualize the path
+            if DEBUG:
+                self.visualize_path(path)
+                self.visualize_tree()
+
+            # Find the waypoint to track
+            waypoint_to_track = self.find_waypoint_to_track(path)
+            if DEBUG:
+                self.visualize_waypoint_to_track(waypoint_to_track)
+
+            # Transform the waypoint to the map frame
+            self.current_following_waypoint  = self.transform_point_to_map_frame(waypoint_to_track, pose)
 
         # Pure pursuit in car frame
         self.pure_pursuit(waypoint_to_track)
@@ -577,19 +578,16 @@ class RRT(Node):
         y = np.random.normal(mean[1], std_dev/2)
 
         # Clip the sampled point to the grid bounds
-        x = np.clip(x, self.grid_bounds_x[0]*0.8, self.grid_bounds_x[1]*0.8)
+        x = np.clip(x, 0.4, self.grid_bounds_x[1]*0.8)
         y = np.clip(y, self.grid_bounds_y[0]*0.8, self.grid_bounds_y[1]*0.8)
 
-        # x_bounds = self.grid_bounds_x
-        # x = np.random.uniform(x_bounds[0], x_bounds[1])
-        # Sample y from -x to x, but also within the grid bounds for y
-        # y_bounds = np.max([-x, self.grid_bounds_y[0]]), np.min([x, self.grid_bounds_y[1]])
-        # y_bounds = self.grid_bounds_y
-        # y = np.random.uniform(y_bounds[0], y_bounds[1])
-
         # Check if the sampled point is in collision
-        # if self.occupancy_grid[x, y] == 1:
-        #     return self.sample(goal)
+        require_resample = False
+        if self.occupancy_grid[x, y] == 1:
+            require_resample = True
+
+        if require_resample:
+            return self.sample(goal)
 
         return (x, y)
 
