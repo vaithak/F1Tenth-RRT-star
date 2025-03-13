@@ -64,7 +64,9 @@ class OccupancyGridManager:
         x, y = coordinate
         i = np.int32((x - self.x_bounds[0]) / self.cell_size)
         j = np.int32((y - self.y_bounds[0]) / self.cell_size)
-        return self.occupancy_grid[i, j]
+        if i >= 0 and i < len(self.occupancy_grid) and j >= 0 and j < len(self.occupancy_grid[0]):
+            return self.occupancy_grid[i, j]
+        return 1 # Occupied if out of bounds.
 
     def __setitem__(self, coordinate, value):
         x, y = coordinate
@@ -142,14 +144,14 @@ class RRT(Node):
         super().__init__('rrt_node')
         self.get_logger().info("RRT Node has been initialized")
         
-        self.declare_parameter('lookahead', 2.5)
+        self.declare_parameter('lookahead', 3.0)
         self.declare_parameter('max_steer_distance', 0.6)
-        self.declare_parameter('min_waypoint_tracking_distance', 1.5)
+        self.declare_parameter('min_waypoint_tracking_distance', 2.0)
         self.declare_parameter('waypoint_close_enough', 1.2)
         self.declare_parameter('cell_size', 0.1)
         self.declare_parameter('goal_bias', 0.1)
         self.declare_parameter('goal_close_enough', 0.05)
-        self.declare_parameter('obstacle_inflation_radius', 0.15)
+        self.declare_parameter('obstacle_inflation_radius', 0.25)
         self.declare_parameter('num_rrt_points', 100)
         self.declare_parameter('neighborhood_radius', 0.8) # Ensure this is greater than max_steer_distance
         self.declare_parameter('waypoint_file', '/home/vaithak/Downloads/UPenn/F1Tenth/sim_ws/src/sampling-based-motion-planning-team6/waypoints/fitted_waypoints.csv')
@@ -516,7 +518,7 @@ class RRT(Node):
             new_rrt_required = True
         else:
             dist_to_waypoint = LA.norm(np.array(self.current_following_waypoint) - np.array([x, y]))
-            if dist_to_waypoint <= self.waypoint_close_enough:
+            if dist_to_waypoint <= self.waypoint_close_enough or dist_to_waypoint >= 2*self.min_waypoint_tracking_distance:
                 new_rrt_required = True
 
             # Or check if waypoint is behind the car
@@ -672,8 +674,9 @@ class RRT(Node):
         i = np.arange(num_points)
         xs = nearest_node.x + i * self.cell_size * cos_theta
         ys = nearest_node.y + i * self.cell_size * sin_theta
-        if np.any(self.occupancy_grid[xs, ys]):
-            return True
+        for x, y in zip(xs, ys):
+            if self.occupancy_grid[x, y] == 1:
+                return True
 
         return False
 
