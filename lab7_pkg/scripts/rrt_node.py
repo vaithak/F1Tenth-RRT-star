@@ -139,15 +139,15 @@ class RRT(Node):
         self.get_logger().info("RRT Node has been initialized")
         
         self.declare_parameter('lookahead', 4.0)
-        self.declare_parameter('max_steer_distance', 0.8)
+        self.declare_parameter('max_steer_distance', 0.6)
         self.declare_parameter('min_waypoint_tracking_distance', 0.8)
         self.declare_parameter('waypoint_close_enough', 0.4)
         self.declare_parameter('cell_size', 0.1)
         self.declare_parameter('goal_bias', 0.1)
         self.declare_parameter('goal_close_enough', 0.05)
         self.declare_parameter('obstacle_inflation_radius', 0.20)
-        self.declare_parameter('num_rrt_points', 250)
-        self.declare_parameter('neighborhood_radius', 1.0)
+        self.declare_parameter('num_rrt_points', 100)
+        self.declare_parameter('neighborhood_radius', 0.8) # Ensure this is greater than max_steer_distance
         self.declare_parameter('waypoint_file', '/home/vaithak/Downloads/UPenn/F1Tenth/sim_ws/src/sampling-based-motion-planning-team6/waypoints/fitted_waypoints.csv')
 
         self.lookahead = self.get_parameter('lookahead').value
@@ -412,10 +412,13 @@ class RRT(Node):
             # Sample a point in the free space
             sampled_point = self.sample(goal)
 
+            # Find the nearest node on the tree to the sampled point
+            nearest_node = self.nearest(self.tree, sampled_point)
+
+            # Steer from the nearest node to the sampled point
+            new_node = self.steer(nearest_node, sampled_point)
+
             # Calculate the cost of the new node
-            new_node = TreeNode()
-            new_node.x = sampled_point[0]
-            new_node.y = sampled_point[1]
             new_node.cost, new_node.parent = self.calc_cost_new_node(self.tree, new_node)
             if new_node.parent is None:
                 continue
@@ -602,8 +605,13 @@ class RRT(Node):
         Returns:
             nearest_node (int): index of neareset node on the tree
         """
-        idx = np.argmin([LA.norm(np.array([node.x, node.y]) - np.array(sampled_point)) for node in tree])
-        nearest_node = tree[idx]
+        nearest_node = None
+        nearest_dist = float('inf')
+        for node in tree:
+            dist = LA.norm(np.array([node.x, node.y]) - np.array(sampled_point))
+            if dist < nearest_dist and dist > 1e-3:
+                nearest_dist = dist
+                nearest_node = node
         return nearest_node
 
 
