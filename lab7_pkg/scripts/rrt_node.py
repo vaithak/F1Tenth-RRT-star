@@ -110,7 +110,7 @@ class OccupancyGridManager:
         Publish the occupancy grid for visualization.
         """
         msg = OccupancyGrid()
-        msg.header.frame_id = "ego_racecar/laser"
+        msg.header.frame_id = self.laser_frame
         msg.info.width = len(self.occupancy_grid)
         msg.info.height = len(self.occupancy_grid[0])
         msg.info.resolution = self.cell_size
@@ -130,10 +130,13 @@ class RRT(Node):
     def __init__(self):
         # Topics
         scan_topic = "/scan"
+        self.laser_frame = "laser"
         if SIMULATION:
             pose_topic = "/ego_racecar/odom"
+            self.laser_frame = "ego_racecar/laser"
         else:
             pose_topic = "/pf/pose/odom"
+            self.laser_frame = "laser"
 
         super().__init__('rrt_node')
         self.get_logger().info("RRT Node has been initialized")
@@ -254,7 +257,7 @@ class RRT(Node):
     def visualize_goal(self, goal_point):
         # Visualize the goal point
         marker = Marker()
-        marker.header.frame_id = "ego_racecar/laser"
+        marker.header.frame_id = laser_frame
         marker.header.stamp = self.get_clock().now().to_msg()
         marker.type = Marker.POINTS
         marker.action = Marker.ADD
@@ -273,7 +276,7 @@ class RRT(Node):
         marker_array = MarkerArray()
 
         marker = Marker()
-        marker.header.frame_id = "ego_racecar/laser"
+        marker.header.frame_id = self.laser_frame
         marker.header.stamp = self.get_clock().now().to_msg()
         marker.type = Marker.POINTS
         marker.action = Marker.ADD
@@ -288,7 +291,7 @@ class RRT(Node):
         marker_array.markers.append(marker)
 
         marker = Marker()
-        marker.header.frame_id = "ego_racecar/laser"
+        marker.header.frame_id = self.laser_frame
         marker.header.stamp = self.get_clock().now().to_msg()
         marker.type = Marker.LINE_LIST
         marker.action = Marker.ADD
@@ -308,7 +311,7 @@ class RRT(Node):
     def visualize_path(self, path):
         # Visualize the path
         marker = Marker()
-        marker.header.frame_id = "ego_racecar/laser"
+        marker.header.frame_id = self.laser_frame
         marker.header.stamp = self.get_clock().now().to_msg()
         marker.type = Marker.LINE_STRIP
         marker.action = Marker.ADD
@@ -324,7 +327,7 @@ class RRT(Node):
     def visualize_waypoint_to_track(self, waypoint):
         # Publish the waypoint to track
         marker = Marker()
-        marker.header.frame_id = "ego_racecar/laser"
+        marker.header.frame_id = self.laser_frame
         marker.header.stamp = self.get_clock().now().to_msg()
         marker.type = Marker.SPHERE 
         marker.action = Marker.ADD
