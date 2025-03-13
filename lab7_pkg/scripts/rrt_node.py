@@ -138,14 +138,14 @@ class RRT(Node):
         super().__init__('rrt_node')
         self.get_logger().info("RRT Node has been initialized")
         
-        self.declare_parameter('lookahead', 4.0)
+        self.declare_parameter('lookahead', 3.0)
         self.declare_parameter('max_steer_distance', 0.6)
-        self.declare_parameter('min_waypoint_tracking_distance', 0.8)
-        self.declare_parameter('waypoint_close_enough', 0.4)
+        self.declare_parameter('min_waypoint_tracking_distance', 2.0)
+        self.declare_parameter('waypoint_close_enough', 1.5)
         self.declare_parameter('cell_size', 0.1)
         self.declare_parameter('goal_bias', 0.1)
         self.declare_parameter('goal_close_enough', 0.05)
-        self.declare_parameter('obstacle_inflation_radius', 0.20)
+        self.declare_parameter('obstacle_inflation_radius', 0.25)
         self.declare_parameter('num_rrt_points', 100)
         self.declare_parameter('neighborhood_radius', 0.8) # Ensure this is greater than max_steer_distance
         self.declare_parameter('waypoint_file', '/home/vaithak/Downloads/UPenn/F1Tenth/sim_ws/src/sampling-based-motion-planning-team6/waypoints/fitted_waypoints.csv')
@@ -205,7 +205,7 @@ class RRT(Node):
         self.prev_curvature = None
         self.kp_gain = 0.4
         self.kd_gain = 0.0
-        self.adaptive_speed = lambda curvature: 0.8
+        self.adaptive_speed = lambda curvature: 7.0 / (1 + 3 * np.abs(curvature))
 
 
     def scan_callback(self, scan_msg):
@@ -454,8 +454,8 @@ class RRT(Node):
             self.prev_curvature = curvature
         steering_angle = self.kp_gain * curvature + self.kd_gain * (curvature - self.prev_curvature)
         self.prev_curvature = curvature
-        if DEBUG:
-            self.get_logger().info(f'Steering angle: {steering_angle}')
+        # if DEBUG:
+            # self.get_logger().info(f'Steering angle: {steering_angle}')
 
         # Publish the drive message
         drive_msg = AckermannDriveStamped()
@@ -463,9 +463,9 @@ class RRT(Node):
         drive_msg.header.frame_id = 'map'
         drive_msg.drive.steering_angle = steering_angle
         drive_msg.drive.speed = self.adaptive_speed(curvature)
-        if DEBUG:
-            self.get_logger().info(f'Steering angle: {drive_msg.drive.steering_angle}')
-            self.get_logger().info(f'Speed: {drive_msg.drive.speed}')
+        # if DEBUG:
+            # self.get_logger().info(f'Steering angle: {drive_msg.drive.steering_angle}')
+            # self.get_logger().info(f'Speed: {drive_msg.drive.speed}')
         self.drive_pub_.publish(drive_msg)
 
     
