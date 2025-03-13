@@ -23,8 +23,8 @@ from visualization_msgs.msg import Marker, MarkerArray
 from tf_transformations import euler_from_quaternion
 
 
-SIMULATION = True
-DEBUG = True
+SIMULATION = False
+DEBUG = False
 
 # class def for tree nodes
 # It's up to you if you want to use this
@@ -42,12 +42,13 @@ class TreeNode(object):
 # This way, we can access the occupancy grid as occupancy_grid[i][j].
 # There will also be a method to convert from (x, y) coordinates to (i, j) indices.
 class OccupancyGridManager:
-    def __init__(self, x_bounds, y_bounds, cell_size, obstacle_inflation_radius, publisher):
+    def __init__(self, x_bounds, y_bounds, cell_size, obstacle_inflation_radius, publisher, laser_frame):
         self.x_bounds = x_bounds
         self.y_bounds = y_bounds
         self.cell_size = cell_size
         self.publisher = publisher
         self.obstacle_inflation_radius = obstacle_inflation_radius
+        self.laser_frame = laser_frame
         
         # Initialize the occupancy grid.
         self.occupancy_grid = []
@@ -141,14 +142,14 @@ class RRT(Node):
         super().__init__('rrt_node')
         self.get_logger().info("RRT Node has been initialized")
         
-        self.declare_parameter('lookahead', 3.0)
+        self.declare_parameter('lookahead', 2.5)
         self.declare_parameter('max_steer_distance', 0.6)
-        self.declare_parameter('min_waypoint_tracking_distance', 2.0)
-        self.declare_parameter('waypoint_close_enough', 1.5)
+        self.declare_parameter('min_waypoint_tracking_distance', 1.5)
+        self.declare_parameter('waypoint_close_enough', 1.2)
         self.declare_parameter('cell_size', 0.1)
         self.declare_parameter('goal_bias', 0.1)
         self.declare_parameter('goal_close_enough', 0.05)
-        self.declare_parameter('obstacle_inflation_radius', 0.25)
+        self.declare_parameter('obstacle_inflation_radius', 0.15)
         self.declare_parameter('num_rrt_points', 100)
         self.declare_parameter('neighborhood_radius', 0.8) # Ensure this is greater than max_steer_distance
         self.declare_parameter('waypoint_file', '/home/vaithak/Downloads/UPenn/F1Tenth/sim_ws/src/sampling-based-motion-planning-team6/waypoints/fitted_waypoints.csv')
@@ -197,7 +198,8 @@ class RRT(Node):
                                                    self.grid_bounds_y,
                                                    self.cell_size, 
                                                    self.obstacle_inflation_radius, 
-                                                   self.grid_vis_pub_)
+                                                   self.grid_vis_pub_,
+                                                   self.laser_frame)
 
         # Create a list to store the tree nodes
         self.tree = []
@@ -208,7 +210,7 @@ class RRT(Node):
         self.prev_curvature = None
         self.kp_gain = 0.4
         self.kd_gain = 0.0
-        self.adaptive_speed = lambda curvature: 7.0 / (1 + 3 * np.abs(curvature))
+        self.adaptive_speed = lambda curvature: 1.4 #/ (1 + 2 * np.abs(curvature))
 
 
     def scan_callback(self, scan_msg):
@@ -257,7 +259,7 @@ class RRT(Node):
     def visualize_goal(self, goal_point):
         # Visualize the goal point
         marker = Marker()
-        marker.header.frame_id = laser_frame
+        marker.header.frame_id = self.laser_frame
         marker.header.stamp = self.get_clock().now().to_msg()
         marker.type = Marker.POINTS
         marker.action = Marker.ADD
