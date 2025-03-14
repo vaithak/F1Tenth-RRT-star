@@ -144,14 +144,15 @@ class RRT(Node):
         super().__init__('rrt_node')
         self.get_logger().info("RRT Node has been initialized")
         
-        self.declare_parameter('lookahead', 3.0)
+        self.declare_parameter('lookahead', 2.5)
         self.declare_parameter('max_steer_distance', 0.6)
-        self.declare_parameter('min_waypoint_tracking_distance', 2.0)
-        self.declare_parameter('waypoint_close_enough', 1.2)
+        self.declare_parameter('min_waypoint_tracking_distance', 0.6)
+        self.declare_parameter('waypoint_close_enough', 0.4)
+        self.declare_parameter('rrt_everytime', False)
         self.declare_parameter('cell_size', 0.1)
         self.declare_parameter('goal_bias', 0.1)
         self.declare_parameter('goal_close_enough', 0.05)
-        self.declare_parameter('obstacle_inflation_radius', 0.25)
+        self.declare_parameter('obstacle_inflation_radius', 0.20)
         self.declare_parameter('num_rrt_points', 100)
         self.declare_parameter('neighborhood_radius', 0.8) # Ensure this is greater than max_steer_distance
         self.declare_parameter('waypoint_file', '/home/vaithak/Downloads/UPenn/F1Tenth/sim_ws/src/sampling-based-motion-planning-team6/waypoints/fitted_waypoints.csv')
@@ -160,6 +161,7 @@ class RRT(Node):
         self.max_steer_distance = self.get_parameter('max_steer_distance').value
         self.min_waypoint_tracking_distance = self.get_parameter('min_waypoint_tracking_distance').value
         self.waypoint_close_enough = self.get_parameter('waypoint_close_enough').value
+        self.rrt_everytime = self.get_parameter('rrt_everytime').value
         self.cell_size = self.get_parameter('cell_size').value
         self.goal_bias = self.get_parameter('goal_bias').value
         self.goal_close_enough = self.get_parameter('goal_close_enough').value
@@ -514,7 +516,7 @@ class RRT(Node):
 
         new_rrt_required = False
         waypoint_to_track = None
-        if self.current_following_waypoint is None:
+        if self.current_following_waypoint is None or self.rrt_everytime:
             new_rrt_required = True
         else:
             dist_to_waypoint = LA.norm(np.array(self.current_following_waypoint) - np.array([x, y]))
