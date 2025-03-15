@@ -23,8 +23,8 @@ from visualization_msgs.msg import Marker, MarkerArray
 from tf_transformations import euler_from_quaternion
 
 
-SIMULATION = False
-DEBUG = False
+SIMULATION = True
+DEBUG = True
 
 # class def for tree nodes
 # It's up to you if you want to use this
@@ -52,28 +52,99 @@ class OccupancyGridManager:
         
         # Initialize the occupancy grid.
         self.occupancy_grid = []
-        num_arrays = int((x_bounds[1] - x_bounds[0]) / cell_size)
-        length = int((y_bounds[1] - y_bounds[0]) / cell_size)
+        num_arrays = int((x_bounds[1] - x_bounds[0]) / cell_size) + 1
+        length = int((y_bounds[1] - y_bounds[0]) / cell_size) + 1
         for i in range(num_arrays):
             self.occupancy_grid.append([])
             for j in range(length):
                 self.occupancy_grid[i].append(0)
         self.occupancy_grid = np.array(self.occupancy_grid, dtype=np.int8)
-        
+
+        self.origin = self.compute_index_from_coordinates(0, 0)
+
+        # Compute angles and range maxes for these angles according to the grid.
+        # For angles < angles_of_intersection[0], ray from origin to the point will intersect with the right wall.
+        # For angles > angles_of_intersection[1], ray from origin to the point will intersect with the left wall.
+        # For angles in between, ray from origin to the point will intersect with the top wall.
+        self.angles_of_intersection = (
+            np.arctan2(y_bounds[0], x_bounds[1]),
+            np.arctan2(y_bounds[1], x_bounds[1])
+        )        
+
+    def compute_index_from_coordinates(self, x, y):
+        # 0, 0 in grid coordinates is top left corner.
+        # But in (x, y) coordinates, top left corner is (x_bounds[1], y_bounds[1]).
+        # Bottom left corner is (x_bounds[0], y_bounds[0]).
+        # x goes from bottom to top, y goes from right to left.
+        i = int((x - self.x_bounds[0]) / self.cell_size)
+        i = len(self.occupancy_grid) - i - 1
+        j = int((y - self.y_bounds[0]) / self.cell_size)
+        j = len(self.occupancy_grid[0]) - j - 1
+        if i < 0 or i >= len(self.occupancy_grid) or j < 0 or j >= len(self.occupancy_grid[0]):
+            return None, None
+        return i, j
+
     def __getitem__(self, coordinate):
         x, y = coordinate
-        i = np.int32((x - self.x_bounds[0]) / self.cell_size)
-        j = np.int32((y - self.y_bounds[0]) / self.cell_size)
-        if i >= 0 and i < len(self.occupancy_grid) and j >= 0 and j < len(self.occupancy_grid[0]):
+        i, j = self.compute_index_from_coordinates(x, y)
+        if i is not None and j is not None:
             return self.occupancy_grid[i, j]
         return 1 # Occupied if out of bounds.
 
     def __setitem__(self, coordinate, value):
         x, y = coordinate
-        i = int((x - self.x_bounds[0]) / self.cell_size)
-        j = int((y - self.y_bounds[0]) / self.cell_size)
-        if i >= 0 and i < len(self.occupancy_grid) and j >= 0 and j < len(self.occupancy_grid[0]):
+        i, j = self.compute_index_from_coordinates(x, y)
+        if i is not None and j is not None:
             self.occupancy_grid[i, j] = value
+
+    def bresenham(self, x1, y1, x2, y2):
+        """
+        Bresenham's line algorithm.
+        Traverse, the grid along the line from (x0, y0) to (x1, y1).
+        """
+        dx = x2 - x1
+        dy = y2 - y1
+
+        # Determine how steep the line is
+        is_steep = abs(dy) > abs(dx)
+
+        # Rotate line
+        if is_steep:
+            x1, y1 = y1, x1
+            x2, y2 = y2, x2
+
+        # Swap start and end points if necessary and store swap state
+        swapped = False
+        if x1 > x2:
+            x1, x2 = x2, x1
+            y1, y2 = y2, y1
+            swapped = True
+
+        # Recalculate differentials
+        dx = x2 - x1
+        dy = y2 - y1
+
+        # Calculate error
+        error = dx // 2
+        ystep = 1 if y1 < y2 else -1
+
+        # Iterate over bounding box generating points between start and end
+        y = y1
+        points = []
+        for x in range(x1, x2 + 1):
+            coord = (y, x) if is_steep else (x, y)
+            points.append(coord)
+            error -= abs(dy)
+            if error < 0:
+                y += ystep
+                error += dx
+
+        # Reverse the list if the coordinates were swapped
+        if swapped:
+            points.reverse()
+
+        return points
+
 
     def populate(self, scan_msg):
         """
@@ -87,20 +158,43 @@ class OccupancyGridManager:
         start_idx = (start_angle - scan_msg.angle_min) / angle_increment
         end_idx = (end_angle - scan_msg.angle_min) / angle_increment
 
-        # Make the whole occupancy grid 0.
+        # Make the whole occupancy grid as 0s.
         np.putmask(self.occupancy_grid, self.occupancy_grid == 1, 0)
-
+        
         for idx in range(int(start_idx), int(end_idx)):
             angle = scan_msg.angle_min + idx * angle_increment
-            x = ranges[idx] * np.cos(angle)
-            y = ranges[idx] * np.sin(angle)
-            if np.isinf(x) or np.isinf(y) or np.isnan(x) or np.isnan(y):
+            r = ranges[idx]
+            if np.isnan(r):
                 continue
-            if x < self.x_bounds[0] or x >= self.x_bounds[1] or y < self.y_bounds[0] or y >= self.y_bounds[1]:
-                continue
-            # Cells along the line from the origin to the point are already set to 0.
-            # Set the cell at the point to 1.
-            self[x, y] = 1
+
+            # Find r_max for the current angle.
+            r_max, x_max, y_max = None, None, None
+            if angle < self.angles_of_intersection[0]:
+                r_max = self.y_bounds[0] / np.sin(angle)
+                x_max = r_max * np.cos(angle)
+                y_max = self.y_bounds[0]
+            elif angle > self.angles_of_intersection[1]:
+                r_max = self.y_bounds[1] / np.sin(angle)
+                x_max = r_max * np.cos(angle)
+                y_max = self.y_bounds[1]
+            else:
+                r_max = self.x_bounds[1] / np.cos(angle)
+                x_max = self.x_bounds[1]
+                y_max = r_max * np.sin(angle)
+            
+            # Clip r according to the grid bounds and current angle.
+            r = min(r, r_max)
+            x = r * np.cos(angle)
+            y = r * np.sin(angle)
+            
+            # Set cells along the line from x, y to x_max, y_max as occupied.
+            start = self.compute_index_from_coordinates(x, y)
+            end = self.compute_index_from_coordinates(x_max, y_max)
+            points = self.bresenham(start[0], start[1], end[0], end[1])
+            if len(points) > 1:
+                for point in points:
+                    x, y = point
+                    self.occupancy_grid[x, y] = 1
 
         # Inflate the obstacles by the inflation radius using numpy's operations.
         inflation_radius = int(self.obstacle_inflation_radius / self.cell_size)
@@ -124,7 +218,7 @@ class OccupancyGridManager:
         msg.info.origin.orientation.y = 0.0
         msg.info.origin.orientation.z = 0.0
         msg.info.origin.orientation.w = 1.0
-        msg.data = (100 * self.occupancy_grid.T).flatten().tolist()
+        msg.data = np.fliplr(np.rot90(100 * self.occupancy_grid, k=1)).flatten().tolist()
         self.publisher.publish(msg)
 
 
@@ -196,7 +290,7 @@ class RRT(Node):
         self.waypoint_to_track_pub_ = self.create_publisher(Marker, '/rrt/waypoint_to_track', 10)
 
         # Create an occupancy grid of nav2_msgs/OccupancyGrid type
-        self.grid_bounds_x = (0.0, self.lookahead*1.2)
+        self.grid_bounds_x = (0.0, self.lookahead)
         self.grid_bounds_y = (-self.lookahead, self.lookahead)
         self.occupancy_grid = OccupancyGridManager(self.grid_bounds_x,
                                                    self.grid_bounds_y,
@@ -475,7 +569,7 @@ class RRT(Node):
         # if DEBUG:
             # self.get_logger().info(f'Steering angle: {drive_msg.drive.steering_angle}')
             # self.get_logger().info(f'Speed: {drive_msg.drive.speed}')
-        self.drive_pub_.publish(drive_msg)
+        # self.drive_pub_.publish(drive_msg)
 
     
     def find_waypoint_to_track(self, path):
