@@ -660,16 +660,21 @@ class RRT(Node):
         if DEBUG:
             self.visualize_goal(goal_point_car_frame)
 
-        # self.current_rrt_delay_counter += 1
         new_rrt_required = False
         waypoint_to_track = goal_point_car_frame
         
         if is_obstacle:
-            new_rrt_required = True
-            self.current_rrt_delay_counter = 0
+            if self.current_rrt_delay_counter >= self.rrt_delay_counter or self.current_following_waypoint is None:
+                new_rrt_required = True
+                self.current_rrt_delay_counter = 0
+            else:
+                self.current_rrt_delay_counter += 1
+                waypoint_to_track = self.transform_point_to_car_frame(self.current_following_waypoint, pose)
+                new_rrt_required = False
         else:
             new_rrt_required = False
-            # waypoint_to_track = self.transform_point_to_car_frame(self.current_following_waypoint, pose)
+            self.current_rrt_delay_counter = 0
+            self.current_following_waypoint = None
 
         # # Run RRT to get a new path if required.
         if new_rrt_required:            
@@ -689,7 +694,7 @@ class RRT(Node):
                 self.visualize_waypoint_to_track(waypoint_to_track)
 
             # Transform the waypoint to the map frame
-            # self.current_following_waypoint  = self.transform_point_to_map_frame(waypoint_to_track, pose)
+            self.current_following_waypoint  = self.transform_point_to_map_frame(waypoint_to_track, pose)
 
         # Pure pursuit in car frame
         self.pure_pursuit(waypoint_to_track)
