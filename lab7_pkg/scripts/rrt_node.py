@@ -228,12 +228,12 @@ class RRT(Node):
         super().__init__('rrt_node')
         self.get_logger().info("RRT Node has been initialized")
         
-        self.declare_parameter('lookahead', 2.5)
+        self.declare_parameter('lookahead', 2.0)
         self.declare_parameter('max_steer_distance', 0.6)
         # self.declare_parameter('min_waypoint_tracking_distance', 0.6)
         # self.declare_parameter('waypoint_close_enough', 0.4)
-        self.declare_parameter('rrt_delay_counter', 5)
-        self.declare_parameter('cell_size', 0.05)
+        self.declare_parameter('rrt_delay_counter', 3)
+        self.declare_parameter('cell_size', 0.1)
         self.declare_parameter('goal_bias', 0.1)
         self.declare_parameter('goal_close_enough', 0.05)
         self.declare_parameter('obstacle_inflation_radius', 0.20)
@@ -298,9 +298,9 @@ class RRT(Node):
 
         # Variables for pure pursuit
         self.prev_curvature = None
-        self.kp_gain = 0.4
+        self.kp_gain = 0.5
         self.kd_gain = 0.0
-        self.adaptive_speed = lambda curvature: 3.0 / (1 + 2 * np.abs(curvature))
+        self.adaptive_speed = lambda curvature: 4.0 / (1 + 2 * np.abs(curvature))
 
 
     def scan_callback(self, scan_msg):
