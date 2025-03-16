@@ -233,7 +233,7 @@ class RRT(Node):
         # self.declare_parameter('min_waypoint_tracking_distance', 0.6)
         # self.declare_parameter('waypoint_close_enough', 0.4)
         self.declare_parameter('rrt_delay_counter', 5)
-        self.declare_parameter('cell_size', 0.1)
+        self.declare_parameter('cell_size', 0.05)
         self.declare_parameter('goal_bias', 0.1)
         self.declare_parameter('goal_close_enough', 0.05)
         self.declare_parameter('obstacle_inflation_radius', 0.20)
@@ -652,26 +652,27 @@ class RRT(Node):
         # Get the current x, y position of the vehicle
         pose = pose_msg.pose.pose
 
-        self.current_rrt_delay_counter += 1
+        # Get the current goal
+        goal_point_car_frame = self.compute_goal_point_in_car_frame(pose)
+        is_obstacle = self.occupancy_grid.check_line_collision(0, 0, goal_point_car_frame[0], goal_point_car_frame[1])
+
+        # Visualize the goal point
+        if DEBUG:
+            self.visualize_goal(goal_point_car_frame)
+
+        # self.current_rrt_delay_counter += 1
         new_rrt_required = False
-        waypoint_to_track = None
+        waypoint_to_track = goal_point_car_frame
         
-        if self.current_following_waypoint is None or self.current_rrt_delay_counter >= self.rrt_delay_counter:
+        if is_obstacle:
             new_rrt_required = True
             self.current_rrt_delay_counter = 0
         else:
             new_rrt_required = False
-            waypoint_to_track = self.transform_point_to_car_frame(self.current_following_waypoint, pose)
+            # waypoint_to_track = self.transform_point_to_car_frame(self.current_following_waypoint, pose)
 
         # # Run RRT to get a new path if required.
-        if new_rrt_required:
-            # Get the current goal
-            goal_point_car_frame = self.compute_goal_point_in_car_frame(pose)
-            
-            # Visualize the goal point
-            if DEBUG:
-                self.visualize_goal(goal_point_car_frame)
-
+        if new_rrt_required:            
             # path = self.rrt(goal_point_car_frame)
             path = self.rrt_star(goal_point_car_frame)
             if path is None or len(path) < 2:
@@ -688,7 +689,7 @@ class RRT(Node):
                 self.visualize_waypoint_to_track(waypoint_to_track)
 
             # Transform the waypoint to the map frame
-            self.current_following_waypoint  = self.transform_point_to_map_frame(waypoint_to_track, pose)
+            # self.current_following_waypoint  = self.transform_point_to_map_frame(waypoint_to_track, pose)
 
         # Pure pursuit in car frame
         self.pure_pursuit(waypoint_to_track)
