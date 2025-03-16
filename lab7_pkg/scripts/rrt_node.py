@@ -202,6 +202,22 @@ class OccupancyGridManager:
         inflated_grid = ndimage.binary_dilation(self.occupancy_grid, mask_struct, iterations=inflation_radius)
         self.occupancy_grid = inflated_grid.astype(np.int8)
 
+    def check_line_collision(self, x1, y1, x2, y2):
+        """
+        Check if the line between (x1, y1) and (x2, y2) is in collision with the occupancy grid.
+        """
+        grid_x1, grid_y1 = self.compute_index_from_coordinates(x1, y1)
+        grid_x2, grid_y2 = self.compute_index_from_coordinates(x2, y2)
+        if grid_x1 is None or grid_y1 is None or grid_x2 is None or grid_y2 is None:
+            return True
+
+        points = self.bresenham(grid_x1, grid_y1, grid_x2, grid_y2)
+        for point in points:
+            i, j = point
+            if self.occupancy_grid[i, j] == 1:
+                return True
+        return False
+
     def publish_for_vis(self):
         """
         Publish the occupancy grid for visualization.
@@ -240,22 +256,23 @@ class RRT(Node):
         
         self.declare_parameter('lookahead', 2.5)
         self.declare_parameter('max_steer_distance', 0.6)
-        self.declare_parameter('min_waypoint_tracking_distance', 0.6)
-        self.declare_parameter('waypoint_close_enough', 0.4)
-        self.declare_parameter('rrt_everytime', False)
+        # self.declare_parameter('min_waypoint_tracking_distance', 0.6)
+        # self.declare_parameter('waypoint_close_enough', 0.4)
+        self.declare_parameter('rrt_delay_counter', 5)
         self.declare_parameter('cell_size', 0.1)
         self.declare_parameter('goal_bias', 0.1)
         self.declare_parameter('goal_close_enough', 0.05)
-        self.declare_parameter('obstacle_inflation_radius', 0.20)
+        self.declare_parameter('obstacle_inflation_radius', 0.15)
         self.declare_parameter('num_rrt_points', 100)
         self.declare_parameter('neighborhood_radius', 0.8) # Ensure this is greater than max_steer_distance
         self.declare_parameter('waypoint_file', '/home/vaithak/Downloads/UPenn/F1Tenth/sim_ws/src/sampling-based-motion-planning-team6/waypoints/fitted_waypoints.csv')
 
         self.lookahead = self.get_parameter('lookahead').value
         self.max_steer_distance = self.get_parameter('max_steer_distance').value
-        self.min_waypoint_tracking_distance = self.get_parameter('min_waypoint_tracking_distance').value
-        self.waypoint_close_enough = self.get_parameter('waypoint_close_enough').value
-        self.rrt_everytime = self.get_parameter('rrt_everytime').value
+        # self.min_waypoint_tracking_distance = self.get_parameter('min_waypoint_tracking_distance').value
+        # self.waypoint_close_enough = self.get_parameter('waypoint_close_enough').value
+        # self.rrt_everytime = self.get_parameter('rrt_everytime').value
+        self.rrt_delay_counter = self.get_parameter('rrt_delay_counter').value
         self.cell_size = self.get_parameter('cell_size').value
         self.goal_bias = self.get_parameter('goal_bias').value
         self.goal_close_enough = self.get_parameter('goal_close_enough').value
@@ -299,10 +316,11 @@ class RRT(Node):
                                                    self.grid_vis_pub_,
                                                    self.laser_frame)
 
-        # Create a list to store the tree nodes
+        # RRT Variables
         self.tree = []
         self.current_following_waypoint = None
         self.grid_formed = False
+        self.current_rrt_delay_counter = 0
 
         # Variables for pure pursuit
         self.prev_curvature = None
@@ -571,7 +589,21 @@ class RRT(Node):
             # self.get_logger().info(f'Speed: {drive_msg.drive.speed}')
         # self.drive_pub_.publish(drive_msg)
 
-    
+
+    def calc_cost_path(self, path):
+        """
+        Calculate the cost of the path
+        Args: 
+            path ([]): list of points representing the path
+        Returns:
+            cost (float): the cost of the path
+        """
+        cost = 0
+        for i in range(1, len(path)):
+            cost += LA.norm(np.array([path[i].x, path[i].y]) - np.array([path[i-1].x, path[i-1].y]))
+        return cost
+
+
     def find_waypoint_to_track(self, path):
         """
         Find the waypoint to track
@@ -584,12 +616,53 @@ class RRT(Node):
         # waypoint = (path[0].x, path[0].y)
         waypoint = None
         print("Path length: ", len(path))
-        for node in path:
-            dist = LA.norm(np.array([node.x, node.y]))
-            if dist >= self.min_waypoint_tracking_distance:
-                waypoint = (node.x, node.y)
-                break
+
+        # Extract path a s tuples of (x, y)
+        coordinates_path = np.array([[node.x, node.y] for node in path])
+        
+        # Pruning the path
+        sub_paths = []
+        for i in range(len(path) - 2):
+            sub_path = coordinates_path
+            for j in range(i + 2, len(path)):
+                if not self.check_collision(path[i], path[j]):
+                    sub_path = np.vstack((coordinates_path[:i+1], coordinates_path[j:]))
+            sub_paths.append(sub_path)
+
+        costs = np.array([np.linalg.norm(p[1:] - p[:-1], axis = 1).sum() for p in sub_paths])
+        path = sub_paths[np.argmin(costs)]
+
+        # Track the first waypoint of this path (after start)
+        waypoint = path[1]
         return waypoint
+
+    def compute_goal_point_in_car_frame(self, car_pose):
+        """
+        Compute the goal point on the waypoints.
+        """
+        car_x, car_y = car_pose.position.x, car_pose.position.y
+        closest_index = np.argmin(np.linalg.norm(self.waypoints[:, :2] - np.array([car_x, car_y]), axis=1))
+        goal_point = None
+        for i in range(closest_index, closest_index + len(self.waypoints)):
+            if i >= len(self.waypoints):
+                i = i - len(self.waypoints)
+            curr_dist = np.linalg.norm(self.waypoints[i, :2] - np.array([car_x, car_y]))
+            if curr_dist > 0.8 * self.lookahead:
+                goal_point = self.waypoints[i, :2]
+                break
+        
+        goal_point_car_frame = self.transform_point_to_car_frame(goal_point, car_pose)
+        # Check if the goal point in car frame is in itself obstacle.
+        if self.occupancy_grid[goal_point_car_frame[0], goal_point_car_frame[1]] == 1:
+            # Try different shifts in y-axis to find a goal point that is not in an obstacle.
+            # This will be ab array of [-0.1, 0.1, -0.2, 0.2, ...] till 1.0, alternate +ve and -ve.
+            shifts = np.array([-0.1, 0.1, -0.2, 0.2, -0.3, 0.3, -0.4, 0.4, -0.5, 0.5, -0.6, 0.6, -0.7, 0.7, -0.8, 0.8, -0.9, 0.9, -1.0, 1.0])
+            for shift in shifts:
+                goal_point_car_frame = np.array([goal_point_car_frame[0], goal_point_car_frame[1] + shift])
+                if self.occupancy_grid[goal_point_car_frame[0], goal_point_car_frame[1]] == 0:
+                    break
+
+        return goal_point_car_frame
 
 
     def pose_callback(self, pose_msg):
@@ -605,37 +678,23 @@ class RRT(Node):
 
         # Get the current x, y position of the vehicle
         pose = pose_msg.pose.pose
-        x = pose.position.x
-        y = pose.position.y
 
+        self.current_rrt_delay_counter += 1
         new_rrt_required = False
         waypoint_to_track = None
-        if self.current_following_waypoint is None or self.rrt_everytime:
+        
+        if self.current_following_waypoint is None or self.current_rrt_delay_counter >= self.rrt_delay_counter:
             new_rrt_required = True
+            self.current_rrt_delay_counter = 0
         else:
-            dist_to_waypoint = LA.norm(np.array(self.current_following_waypoint) - np.array([x, y]))
-            if dist_to_waypoint <= self.waypoint_close_enough or dist_to_waypoint >= 2*self.min_waypoint_tracking_distance:
-                new_rrt_required = True
-
-            # Or check if waypoint is behind the car
+            new_rrt_required = False
             waypoint_to_track = self.transform_point_to_car_frame(self.current_following_waypoint, pose)
-            if waypoint_to_track[0] < 0:
-                new_rrt_required = True
 
-        # Run RRT to get a new path if required.
+        # # Run RRT to get a new path if required.
         if new_rrt_required:
             # Get the current goal
-            closest_index = np.argmin(np.linalg.norm(self.waypoints[:, :2] - np.array([x, y]), axis=1))
-            goal_point = None
-            for i in range(closest_index, closest_index + len(self.waypoints)):
-                if i >= len(self.waypoints):
-                    i = i - len(self.waypoints)
-                curr_dist = np.linalg.norm(self.waypoints[i, :2] - np.array([x, y]))
-                if curr_dist > 0.8 * self.lookahead:
-                    goal_point = self.waypoints[i, :2]
-                    break
-
-            goal_point_car_frame = self.transform_point_to_car_frame(goal_point, pose)
+            goal_point_car_frame = self.compute_goal_point_in_car_frame(pose)
+            
             # Visualize the goal point
             if DEBUG:
                 self.visualize_goal(goal_point_car_frame)
@@ -763,17 +822,8 @@ class RRT(Node):
                               with the occupancy grid
         """
         # check if the line between nearest and new_node is in collision
-        node_dist = LA.norm(np.array([nearest_node.x, nearest_node.y]) - np.array([new_node.x, new_node.y]))
-        cos_theta = (new_node.x - nearest_node.x) / node_dist
-        sin_theta = (new_node.y - nearest_node.y) / node_dist
-        num_points = int(node_dist / self.cell_size)
-        i = np.arange(num_points)
-        xs = nearest_node.x + i * self.cell_size * cos_theta
-        ys = nearest_node.y + i * self.cell_size * sin_theta
-        for x, y in zip(xs, ys):
-            if self.occupancy_grid[x, y] == 1:
-                return True
-
+        if (self.occupancy_grid.check_line_collision(nearest_node.x, nearest_node.y, new_node.x, new_node.y)):
+            return True
         return False
 
 
