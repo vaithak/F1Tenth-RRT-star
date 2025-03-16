@@ -166,35 +166,9 @@ class OccupancyGridManager:
             r = ranges[idx]
             if np.isnan(r):
                 continue
-
-            # Find r_max for the current angle.
-            r_max, x_max, y_max = None, None, None
-            if angle < self.angles_of_intersection[0]:
-                r_max = self.y_bounds[0] / np.sin(angle)
-                x_max = r_max * np.cos(angle)
-                y_max = self.y_bounds[0]
-            elif angle > self.angles_of_intersection[1]:
-                r_max = self.y_bounds[1] / np.sin(angle)
-                x_max = r_max * np.cos(angle)
-                y_max = self.y_bounds[1]
-            else:
-                r_max = self.x_bounds[1] / np.cos(angle)
-                x_max = self.x_bounds[1]
-                y_max = r_max * np.sin(angle)
-            
-            # Clip r according to the grid bounds and current angle.
-            r = min(r, r_max)
             x = r * np.cos(angle)
             y = r * np.sin(angle)
-            
-            # Set cells along the line from x, y to x_max, y_max as occupied.
-            start = self.compute_index_from_coordinates(x, y)
-            end = self.compute_index_from_coordinates(x_max, y_max)
-            points = self.bresenham(start[0], start[1], end[0], end[1])
-            if len(points) > 1:
-                for point in points:
-                    x, y = point
-                    self.occupancy_grid[x, y] = 1
+            self[x, y] = 1
 
         # Inflate the obstacles by the inflation radius using numpy's operations.
         inflation_radius = int(self.obstacle_inflation_radius / self.cell_size)
@@ -262,7 +236,7 @@ class RRT(Node):
         self.declare_parameter('cell_size', 0.1)
         self.declare_parameter('goal_bias', 0.1)
         self.declare_parameter('goal_close_enough', 0.05)
-        self.declare_parameter('obstacle_inflation_radius', 0.15)
+        self.declare_parameter('obstacle_inflation_radius', 0.20)
         self.declare_parameter('num_rrt_points', 100)
         self.declare_parameter('neighborhood_radius', 0.8) # Ensure this is greater than max_steer_distance
         self.declare_parameter('waypoint_file', '/home/vaithak/Downloads/UPenn/F1Tenth/sim_ws/src/sampling-based-motion-planning-team6/waypoints/fitted_waypoints.csv')
@@ -308,7 +282,7 @@ class RRT(Node):
 
         # Create an occupancy grid of nav2_msgs/OccupancyGrid type
         self.grid_bounds_x = (0.0, self.lookahead)
-        self.grid_bounds_y = (-self.lookahead, self.lookahead)
+        self.grid_bounds_y = (-self.lookahead/2, self.lookahead/2)
         self.occupancy_grid = OccupancyGridManager(self.grid_bounds_x,
                                                    self.grid_bounds_y,
                                                    self.cell_size, 
@@ -326,7 +300,7 @@ class RRT(Node):
         self.prev_curvature = None
         self.kp_gain = 0.4
         self.kd_gain = 0.0
-        self.adaptive_speed = lambda curvature: 1.4 #/ (1 + 2 * np.abs(curvature))
+        self.adaptive_speed = lambda curvature: 3.0 / (1 + 2 * np.abs(curvature))
 
 
     def scan_callback(self, scan_msg):
@@ -587,7 +561,7 @@ class RRT(Node):
         # if DEBUG:
             # self.get_logger().info(f'Steering angle: {drive_msg.drive.steering_angle}')
             # self.get_logger().info(f'Speed: {drive_msg.drive.speed}')
-        # self.drive_pub_.publish(drive_msg)
+        self.drive_pub_.publish(drive_msg)
 
 
     def calc_cost_path(self, path):
@@ -652,15 +626,14 @@ class RRT(Node):
                 break
         
         goal_point_car_frame = self.transform_point_to_car_frame(goal_point, car_pose)
-        # Check if the goal point in car frame is in itself obstacle.
-        if self.occupancy_grid[goal_point_car_frame[0], goal_point_car_frame[1]] == 1:
-            # Try different shifts in y-axis to find a goal point that is not in an obstacle.
-            # This will be ab array of [-0.1, 0.1, -0.2, 0.2, ...] till 1.0, alternate +ve and -ve.
-            shifts = np.array([-0.1, 0.1, -0.2, 0.2, -0.3, 0.3, -0.4, 0.4, -0.5, 0.5, -0.6, 0.6, -0.7, 0.7, -0.8, 0.8, -0.9, 0.9, -1.0, 1.0])
-            for shift in shifts:
-                goal_point_car_frame = np.array([goal_point_car_frame[0], goal_point_car_frame[1] + shift])
-                if self.occupancy_grid[goal_point_car_frame[0], goal_point_car_frame[1]] == 0:
-                    break
+        # Try different shifts in y-axis to find a goal point that is not in an obstacle.
+        shifts = np.array([0.0, -0.1, 0.1, -0.2, 0.2, -0.3, 0.3, -0.4, 0.4, -0.5, 0.5, -0.6, 0.6, -0.7, 0.7, -0.8, 0.8, -0.9, 0.9, -1.0, 1.0])
+        for shift in shifts:
+            modified_goal_point_car_frame = np.array([goal_point_car_frame[0], goal_point_car_frame[1] + shift])
+            # Check if the straight line from the car to the goal point is in collision.
+            if not self.occupancy_grid.check_line_collision(0, 0, modified_goal_point_car_frame[0], modified_goal_point_car_frame[1]):
+                goal_point_car_frame = modified_goal_point_car_frame
+                break
 
         return goal_point_car_frame
 
