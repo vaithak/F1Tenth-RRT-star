@@ -25,6 +25,7 @@ from tf_transformations import euler_from_quaternion
 
 SIMULATION = True
 DEBUG = True
+INVALID_INDEX = -1
 
 # class def for tree nodes
 # It's up to you if you want to use this
@@ -76,26 +77,37 @@ class OccupancyGridManager:
         # But in (x, y) coordinates, top left corner is (x_bounds[1], y_bounds[1]).
         # Bottom left corner is (x_bounds[0], y_bounds[0]).
         # x goes from bottom to top, y goes from right to left.
-        i = int((x - self.x_bounds[0]) / self.cell_size)
+        i = np.int32((x - self.x_bounds[0]) / self.cell_size)
         i = len(self.occupancy_grid) - i - 1
-        j = int((y - self.y_bounds[0]) / self.cell_size)
+        j = np.int32((y - self.y_bounds[0]) / self.cell_size)
         j = len(self.occupancy_grid[0]) - j - 1
-        if i < 0 or i >= len(self.occupancy_grid) or j < 0 or j >= len(self.occupancy_grid[0]):
-            return None, None
+        # if i, j is out of bounds, put None.
+        # Check if i is a numpy array,
+        if isinstance(i, np.ndarray):
+            np.putmask(i, i < 0, INVALID_INDEX)
+            np.putmask(i, i >= len(self.occupancy_grid), INVALID_INDEX)
+            np.putmask(j, j < 0, INVALID_INDEX)
+            np.putmask(j, j >= len(self.occupancy_grid[0]), INVALID_INDEX)
+        else:
+            if i < 0 or i >= len(self.occupancy_grid) or j < 0 or j >= len(self.occupancy_grid[0]):
+                return INVALID_INDEX, INVALID_INDEX
         return i, j
 
     def __getitem__(self, coordinate):
         x, y = coordinate
         i, j = self.compute_index_from_coordinates(x, y)
-        if i is not None and j is not None:
-            return self.occupancy_grid[i, j]
-        return 1 # Occupied if out of bounds.
+        # Get value only where i, j is not None.
+        res = np.ones_like(i)
+        np.putmask(res, i is not INVALID_INDEX and j is not INVALID_INDEX, self.occupancy_grid[i, j])
 
     def __setitem__(self, coordinate, value):
         x, y = coordinate
         i, j = self.compute_index_from_coordinates(x, y)
-        if i is not None and j is not None:
-            self.occupancy_grid[i, j] = value
+        # Put value only where i, j is not None.
+        # Filter out the indices where i, j is None and only set the values where i, j is not None.
+        valid_indices = np.logical_and(i != INVALID_INDEX, j != INVALID_INDEX)
+        self.occupancy_grid[i[valid_indices], j[valid_indices]] = value
+        
 
     def bresenham(self, x1, y1, x2, y2):
         """
@@ -160,15 +172,12 @@ class OccupancyGridManager:
 
         # Make the whole occupancy grid as 0s.
         np.putmask(self.occupancy_grid, self.occupancy_grid == 1, 0)
-        
-        for idx in range(int(start_idx), int(end_idx)):
-            angle = scan_msg.angle_min + idx * angle_increment
-            r = ranges[idx]
-            if np.isnan(r):
-                continue
-            x = r * np.cos(angle)
-            y = r * np.sin(angle)
-            self[x, y] = 1
+        # Vectorize the above loop.
+        ranges = np.array(ranges)[int(start_idx):int(end_idx+1)]
+        angles = np.arange(start_angle, end_angle, angle_increment)
+        xs = np.multiply(ranges, np.cos(angles))
+        ys = np.multiply(ranges, np.sin(angles))
+        self[xs, ys] = 1
 
         # Inflate the obstacles by the inflation radius using numpy's operations.
         inflation_radius = int(self.obstacle_inflation_radius / self.cell_size)
