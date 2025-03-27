@@ -15,14 +15,7 @@ In general, RRT is often used as a global planner where the tree is kept through
 - Further pruning the path and choosing a suitable waypoint to follow.
 - Pure pursuit controlller on the chosen waypoint.
 
-### Youtube video links
- - [Basic RRT working on Simulator](https://youtu.be/ZJQH1_YIZVs)  
- - [RRT* Working on Simulator - without tree visualization](https://youtu.be/ragM_NNj69o)  
- - [RRT* Working on Simulator - with tree visualization](https://youtu.be/XVz7nyZut30)
- - [RRT* Working on the real car](https://youtube.com/shorts/AR6vk_OLl9Y?feature=share)  
-
-### Real car video
-https://github.com/user-attachments/assets/d3c6543d-0440-4386-a912-6647c1a27427
-
-### Simulation video
-[Screencast from 03-13-2025 03:23:47 AM.webm](https://github.com/user-attachments/assets/7cb42514-1cb2-4880-8eb9-ac6c2ee196c1)
+### Working videos
+Real car | Simulation
+:-: | :-:
+<video src="https://github.com/user-attachments/assets/d3c6543d-0440-4386-a912-6647c1a27427"/> | <video src="https://github.com/user-attachments/assets/7cb42514-1cb2-4880-8eb9-ac6c2ee196c1"/>
